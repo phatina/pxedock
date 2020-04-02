@@ -1,46 +1,23 @@
 #!/bin/sh
 
-start_dhcpd () {
-	/usr/sbin/dhcpd -4 -f -d --no-pid -cf /etc/dhcp/dhcpd.conf &
-	DHCPD_PID=$!
-}
-
-kill_dhcpd () {
-	[ $DHCP_PID ] && kill $DHCPD_PID
-}
-
-check_conf () {
-	echo "$SHASUM" | sha1sum -c -
-	SAME=$?
-	if [ $SAME -ne 0 ]; then
-		echo "hostlist changed, restarting dhcp server"
-		SHASUM=$(sha1sum /etc/dhcp/conf.d/$host_file)
-		kill_dhcpd
-		start_dhcpd
-	else
-		echo "No changes made to hostlist, continuing"
-	fi
-}
-
-poll_dhcp () {
-    while [ 1 ]
-    do
-	check_conf
-	sleep $DHCP_update_time
-    done
-}
-
+if [ "x$IP" == "x" ]; then
+    IP=`ip a s dev ${iface} \
+       | grep '\<inet\>' \
+       | sed 's|\s*inet \([0-9.]\+\).*|\1|g'`
+fi
 
 generate_conf () {
     if [ "x$IP" == "x" ]; then
-	ip route get $DNS > /tmp/net
-	read t t gw t t t IP < /tmp/net
-	subn=$(echo $IP | cut -f 1-3 -d .)
+        ip route get $DNS > /tmp/net
+        read t t gw t t t IP < /tmp/net
+        subn=$(echo $IP | cut -f 1-3 -d .)
     else
-	subn=$(echo $IP | cut -f 1-3 -d .)
-	gw=$subn".1"
+        subn=$(echo $IP | cut -f 1-3 -d .)
+        gw=$subn".1"
     fi
     bcast=$subn".255"
+    pool_start=$subn".15"
+    pool_end=$subn".250"
     subn=$subn".0"
     subnetmask="255.255.255.0"
 
@@ -56,6 +33,7 @@ subnet $subn netmask $subnetmask {
 	option broadcast-address $bcast;
 	next-server $IP;
 	filename "$PXE_target";
+	range $pool_start $pool_end;
 }
 include "/etc/dhcp/conf.d/$host_file";
 EOF
@@ -78,8 +56,8 @@ EOF2
     fi
 }
 
-# actually run everything
 generate_conf
-poll_dhcp &
 
+# Run daemons
+     /usr/sbin/dhcpd -4 -f -d --no-pid -cf /etc/dhcp/dhcpd.conf $iface &
 exec /usr/sbin/in.tftpd $@
